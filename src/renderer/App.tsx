@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   RendererSnapshot,
   TaskLabel,
@@ -10,6 +10,7 @@ import {
   Check,
   CheckCircle2,
   ChevronDown,
+  ChevronUp,
   ChevronLeft,
   ChevronRight,
   Feather,
@@ -58,12 +59,21 @@ function buildCalendar(dateKey: string, tasks: TaskRecord[], today: string) {
   const start = new Date(current);
   const weekday = (start.getDay() + 6) % 7;
   start.setDate(start.getDate() - weekday);
+  const tasksByDate = new Map<string, TaskRecord[]>();
+  for (const task of tasks) {
+    const dayTasks = tasksByDate.get(task.taskDate);
+    if (dayTasks) {
+      dayTasks.push(task);
+    } else {
+      tasksByDate.set(task.taskDate, [task]);
+    }
+  }
 
   return Array.from({ length: 35 }, (_, index) => {
     const day = new Date(start);
     day.setDate(start.getDate() + index);
     const key = day.toISOString().slice(0, 10);
-    const dayTasks = tasks.filter((task) => task.taskDate === key);
+    const dayTasks = tasksByDate.get(key) ?? [];
     return {
       key,
       day: day.getDate(),
@@ -149,6 +159,7 @@ function WindowControls({ widget }: { widget?: boolean }) {
 
 export function App() {
   const mode = getViewMode();
+  const rendererReadySent = useRef(false);
   const [snapshot, setSnapshot] = useState<RendererSnapshot | null>(null);
   const [quickTask, setQuickTask] = useState("");
   const [taskLabel, setTaskLabel] = useState<TaskLabel>("工作");
@@ -181,13 +192,14 @@ export function App() {
   }, [editingTask]);
 
   useEffect(() => {
-    if (!snapshot) {
+    if (!snapshot || rendererReadySent.current) {
       return;
     }
 
     let secondPaint = 0;
     const firstPaint = window.requestAnimationFrame(() => {
       secondPaint = window.requestAnimationFrame(() => {
+        rendererReadySent.current = true;
         void window.desktopAPI.notifyRendererReady(mode);
       });
     });
@@ -198,14 +210,14 @@ export function App() {
         window.cancelAnimationFrame(secondPaint);
       }
     };
-  }, [mode, snapshot]);
+  }, [mode, Boolean(snapshot)]);
 
   const calendarDays = useMemo(() => {
-    if (!snapshot) {
+    if (!snapshot || snapshot.currentView !== "calendar") {
       return [];
     }
     return buildCalendar(snapshot.selectedDate, snapshot.monthTasks, snapshot.today);
-  }, [snapshot]);
+  }, [snapshot?.currentView, snapshot?.selectedDate, snapshot?.monthTasks, snapshot?.today]);
 
   if (!snapshot) {
     return <div className="app-loading">正在加载极简待办...</div>;
@@ -531,6 +543,9 @@ export function App() {
                 <span className="widget-date">{formatWidgetDate(snapshot.today)}</span>
               </div>
               <div className="widget-controls no-drag">
+                <button className="window-control" onClick={() => void window.desktopAPI.collapseWidget()} title="贴边收起">
+                  <ChevronUp size={15} />
+                </button>
                 <button className="window-control" onClick={() => void window.desktopAPI.toggleWidgetPin()}>
                   <Pin size={15} />
                 </button>

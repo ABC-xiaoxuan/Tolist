@@ -43,6 +43,7 @@ const WIDGET_WINDOW_RADIUS = 24;
 const WIDGET_COLLAPSED_RADIUS = 13;
 const WIDGET_COLLAPSED_HEIGHT = 28;
 const WIDGET_EDGE_THRESHOLD = 10;
+const WIDGET_EXPAND_OFFSET = 14;
 const SHAPE_RESIZE_DEBOUNCE_MS = 48;
 
 type ShapeCache = {
@@ -69,6 +70,10 @@ let mainShapeTimer: NodeJS.Timeout | null = null;
 let widgetShapeTimer: NodeJS.Timeout | null = null;
 let mainShapeCache: ShapeCache | null = null;
 let widgetShapeCache: ShapeCache | null = null;
+let lastTrayWidgetVisible: boolean | null = null;
+let dailySayingAbortController: AbortController | null = null;
+let dailySayingTimeout: NodeJS.Timeout | null = null;
+let lastRolloverDate: string | null = null;
 
 function toDateKey(date: Date) {
   return date.toISOString().slice(0, 10);
@@ -118,23 +123,30 @@ function extractSayingText(response: unknown) {
 }
 
 async function refreshDailySaying() {
-  let timeout: NodeJS.Timeout | null = null;
+  dailySayingAbortController?.abort();
+  dailySayingTimeout = clearTimer(dailySayingTimeout);
+  const controller = new AbortController();
+  dailySayingAbortController = controller;
   try {
-    const controller = new AbortController();
-    timeout = setTimeout(() => controller.abort(), 8000);
+    dailySayingTimeout = setTimeout(() => controller.abort(), 8000);
     const response = await fetch("https://uapis.cn/api/v1/saying", {
       signal: controller.signal,
       cache: "no-store"
     });
     dailySaying = extractSayingText(await response.json());
   } catch (error) {
-    log.warn("Failed to fetch daily saying", error);
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
+    if (!isQuitting && !(error instanceof Error && error.name === "AbortError")) {
+      log.warn("Failed to fetch daily saying", error);
     }
+  } finally {
+    if (dailySayingAbortController === controller) {
+      dailySayingAbortController = null;
+    }
+    dailySayingTimeout = clearTimer(dailySayingTimeout);
   }
-  broadcastState();
+  if (!isQuitting) {
+    broadcastState();
+  }
 }
 
 function buildRoundedWindowShape(width: number, height: number, radius: number): Rectangle[] {
@@ -235,6 +247,18 @@ function scheduleWidgetWindowShape() {
     widgetShapeTimer = null;
     applyWidgetWindowShape();
   }, SHAPE_RESIZE_DEBOUNCE_MS);
+}
+
+function invalidateRolloverCache() {
+  lastRolloverDate = null;
+}
+
+function ensureRolloverForToday(today: string) {
+  if (lastRolloverDate === today) {
+    return;
+  }
+  db.rolloverIncompleteTasks(today);
+  lastRolloverDate = today;
 }
 
 function revealMainWindowWhenReady() {
@@ -355,7 +379,7 @@ function createWidgetWindow() {
     title: "极简待办 - 浮窗",
     icon: getAppIcon(),
     alwaysOnTop: windowState.widgetPinned,
-    skipTaskbar: false,
+    skipTaskbar: true,
     backgroundColor: "#00000000",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -380,8 +404,11 @@ function createWidgetWindow() {
   });
   widgetWindow.on("resized", applyWidgetWindowShape);
   widgetWindow.on("closed", () => {
+    widgetWindow = null;
+    widgetMoveTimer = clearTimer(widgetMoveTimer);
     widgetShapeTimer = clearTimer(widgetShapeTimer);
     widgetShapeCache = null;
+    updateTrayMenuIfNeeded(true);
   });
   return widgetWindow;
 }
@@ -448,8 +475,13 @@ function setWidgetCollapsed(collapsed: boolean) {
   if (!widgetWindow) {
     return false;
   }
+  widgetMoveTimer = clearTimer(widgetMoveTimer);
   const current = db.getWindowState();
   const bounds = widgetWindow.getBounds();
+  const display = screen.getDisplayMatching(bounds);
+  const expandedY = collapsed
+    ? bounds.y
+    : Math.max(bounds.y, display.workArea.y + WIDGET_EDGE_THRESHOLD + WIDGET_EXPAND_OFFSET);
   const expandedBounds = current.widgetCollapsed
     ? current.widgetBounds ?? bounds
     : {
@@ -462,7 +494,7 @@ function setWidgetCollapsed(collapsed: boolean) {
     ? { x: bounds.x, y: bounds.y, width: bounds.width, height: WIDGET_COLLAPSED_HEIGHT }
     : {
         x: current.widgetBounds?.x ?? bounds.x,
-        y: bounds.y,
+        y: expandedY,
         width: current.widgetBounds?.width ?? bounds.width,
         height: Math.max(current.widgetBounds?.height ?? expandedBounds.height, 320)
       };
@@ -490,13 +522,18 @@ function createTray() {
   tray.on("double-click", () => {
     showMainWindowSafely();
   });
-  rebuildTrayMenu();
+  updateTrayMenuIfNeeded(true);
 }
 
-function rebuildTrayMenu() {
+function updateTrayMenuIfNeeded(force = false) {
   if (!tray) {
     return;
   }
+  const widgetVisible = widgetWindow?.isVisible() ?? false;
+  if (!force && lastTrayWidgetVisible === widgetVisible) {
+    return;
+  }
+  lastTrayWidgetVisible = widgetVisible;
   const contextMenu = Menu.buildFromTemplate([
     {
       label: "打开主界面",
@@ -505,8 +542,14 @@ function rebuildTrayMenu() {
       }
     },
     {
-      label: "显示浮窗",
-      click: () => showWidgetWindow()
+      label: widgetVisible ? "关闭浮窗" : "显示浮窗",
+      click: () => {
+        if (widgetVisible) {
+          hideWidgetWindow();
+        } else {
+          showWidgetWindow();
+        }
+      }
     },
     {
       label: "退出",
@@ -521,43 +564,72 @@ function rebuildTrayMenu() {
 
 function broadcastState() {
   const today = toDateKey(new Date());
-  db.rolloverIncompleteTasks(today);
+  ensureRolloverForToday(today);
   if (currentView === "today" && selectedDate < today) {
     selectedDate = today;
   }
-  const tasks = db.getTasksByDate(selectedDate);
-  const todayTasks = selectedDate === today ? tasks : db.getTasksByDate(today);
-  const summary = db.getSummary(selectedDate.slice(0, 7));
-  const payload: RendererPayload = {
-    type: "snapshot",
-    payload: {
-      today,
-      selectedDate,
-      currentView,
-      widgetVisible: widgetWindow?.isVisible() ?? false,
-      mainMaximized: mainWindow?.isMaximized() ?? false,
-      dailySaying,
-      tasks,
-      todayTasks,
-      completedTasks: db.getCompletedTasks(),
-      monthTasks: db.getMonthTasks(selectedDate.slice(0, 7)),
-      summary,
-      settings: db.getWindowState()
-    }
+  const mainIsAlive = Boolean(mainWindow && !mainWindow.isDestroyed());
+  const widgetIsAlive = Boolean(widgetWindow && !widgetWindow.isDestroyed());
+  if (!mainIsAlive && !widgetIsAlive) {
+    updateTrayMenuIfNeeded();
+    return;
+  }
+
+  const settings = db.getWindowState();
+  const tasks = mainIsAlive ? db.getTasksByDate(selectedDate) : [];
+  const todayTasks = selectedDate === today && mainIsAlive ? tasks : db.getTasksByDate(today);
+  const basePayload = {
+    today,
+    selectedDate,
+    currentView,
+    widgetVisible: widgetWindow?.isVisible() ?? false,
+    mainMaximized: mainWindow?.isMaximized() ?? false,
+    dailySaying,
+    settings
   };
-  const widgetPayload: RendererPayload = {
+
+  if (mainIsAlive && mainWindow) {
+    const payload: RendererPayload = {
+      type: "snapshot",
+      payload: {
+        ...basePayload,
+        tasks,
+        todayTasks,
+        completedTasks: db.getCompletedTasks(),
+        monthTasks: db.getMonthTasks(selectedDate.slice(0, 7)),
+        summary: db.getSummary(selectedDate.slice(0, 7))
+      }
+    };
+    mainWindow.webContents.send("app:snapshot", payload);
+  }
+
+  if (widgetIsAlive && widgetWindow) {
+    const widgetPayload: RendererPayload = {
     type: "snapshot",
     payload: {
-      ...payload.payload,
+      ...basePayload,
       tasks: [],
       completedTasks: [],
       monthTasks: [],
-      todayTasks
+      todayTasks,
+      summary: {
+        total: 0,
+        completed: 0,
+        completionRate: 0,
+        labelDistribution: {
+          工作: 0,
+          设计: 0,
+          学习: 0,
+          健康: 0,
+          生活: 0,
+          延迟: 0
+        }
+      }
     }
-  };
-  mainWindow?.webContents.send("app:snapshot", payload);
-  widgetWindow?.webContents.send("app:snapshot", widgetPayload);
-  rebuildTrayMenu();
+    };
+    widgetWindow.webContents.send("app:snapshot", widgetPayload);
+  }
+  updateTrayMenuIfNeeded();
 }
 
 function toggleWidgetVisibility() {
@@ -565,7 +637,7 @@ function toggleWidgetVisibility() {
     const createdWidget = createWidgetWindow();
     createdWidget.show();
     createdWidget.focus();
-    rebuildTrayMenu();
+    broadcastState();
     return;
   }
   if (widgetWindow.isVisible()) {
@@ -574,7 +646,7 @@ function toggleWidgetVisibility() {
     widgetWindow.show();
     widgetWindow.focus();
   }
-  rebuildTrayMenu();
+  broadcastState();
 }
 
 function showWidgetWindow() {
@@ -582,19 +654,19 @@ function showWidgetWindow() {
     const createdWidget = createWidgetWindow();
     createdWidget.show();
     createdWidget.focus();
-    rebuildTrayMenu();
+    broadcastState();
     return;
   }
   if (!widgetWindow.isVisible()) {
     widgetWindow.show();
   }
   widgetWindow.focus();
-  rebuildTrayMenu();
+  broadcastState();
 }
 
 function hideWidgetWindow() {
   widgetWindow?.hide();
-  rebuildTrayMenu();
+  broadcastState();
 }
 
 function registerIpc() {
@@ -613,6 +685,7 @@ function registerIpc() {
 
   ipcMain.handle("tasks:create", (_, payload: { title: string; taskDate: string; timeText?: string; label?: TaskLabel }) => {
     db.createTask(payload);
+    invalidateRolloverCache();
     broadcastState();
     return true;
   });
@@ -621,6 +694,7 @@ function registerIpc() {
     "tasks:update",
     (_, payload: { id: number; title?: string; taskDate?: string; timeText?: string; label?: TaskLabel; completed?: number }) => {
       db.updateTask(payload.id, payload);
+      invalidateRolloverCache();
       broadcastState();
       return true;
     }
@@ -628,6 +702,7 @@ function registerIpc() {
 
   ipcMain.handle("tasks:toggle", (_, id: number) => {
     db.toggleTask(id);
+    invalidateRolloverCache();
     broadcastState();
     return true;
   });
@@ -693,7 +768,6 @@ function registerIpc() {
     } else {
       showWidgetWindow();
     }
-    broadcastState();
     return true;
   });
 
@@ -727,7 +801,7 @@ function registerIpc() {
     } else {
       widgetWindow?.hide();
     }
-    rebuildTrayMenu();
+    updateTrayMenuIfNeeded();
     return true;
   });
 
@@ -774,4 +848,11 @@ app.on("before-quit", () => {
   mainRevealTimer = clearTimer(mainRevealTimer);
   mainShapeTimer = clearTimer(mainShapeTimer);
   widgetShapeTimer = clearTimer(widgetShapeTimer);
+  dailySayingAbortController?.abort();
+  dailySayingAbortController = null;
+  dailySayingTimeout = clearTimer(dailySayingTimeout);
+  tray?.destroy();
+  tray = null;
+  lastTrayWidgetVisible = null;
+  db.close();
 });

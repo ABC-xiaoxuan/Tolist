@@ -25,6 +25,7 @@ const DEFAULT_WINDOW_STATE: WindowState = {
 
 export class TodoDatabase {
   private db: Database.Database;
+  private closed = false;
 
   constructor() {
     const dataDir = app.getPath("userData");
@@ -308,6 +309,14 @@ export class TodoDatabase {
       completionRate: total ? Math.round((completed / total) * 100) : 0,
       labelDistribution
     };
+  }
+
+  close() {
+    if (this.closed) {
+      return;
+    }
+    this.db.close();
+    this.closed = true;
   }
 
 }
