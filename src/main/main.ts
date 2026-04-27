@@ -76,7 +76,14 @@ let dailySayingTimeout: NodeJS.Timeout | null = null;
 let lastRolloverDate: string | null = null;
 
 function toDateKey(date: Date) {
-  return date.toISOString().slice(0, 10);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function toMonthKey(dateKey: string) {
+  return dateKey.slice(0, 7);
 }
 
 function resolveRendererUrl(view: "main" | "widget") {
@@ -596,8 +603,8 @@ function broadcastState() {
         tasks,
         todayTasks,
         completedTasks: db.getCompletedTasks(),
-        monthTasks: db.getMonthTasks(selectedDate.slice(0, 7)),
-        summary: db.getSummary(selectedDate.slice(0, 7))
+        monthTasks: db.getMonthTasks(toMonthKey(selectedDate)),
+        summary: db.getSummary(toMonthKey(selectedDate))
       }
     };
     mainWindow.webContents.send("app:snapshot", payload);

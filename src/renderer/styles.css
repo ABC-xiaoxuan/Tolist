@@ -845,18 +845,32 @@ body.main-body:has(.desktop-shell.is-maximized) #root,
 .modal-backdrop {
   position: fixed;
   inset: 0;
+  z-index: 1000;
   background: rgba(15, 23, 42, 0.24);
   display: grid;
   place-items: center;
   padding: 20px;
+  isolation: isolate;
 }
 
 .modal-card {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  color: #1f2937;
   width: min(460px, 100%);
+  max-height: calc(100dvh - 40px);
+  overflow: auto;
   background: white;
+  border: 1px solid rgba(229, 231, 235, 0.96);
   border-radius: 24px;
   padding: 22px;
   box-shadow: 0 30px 60px rgba(15, 23, 42, 0.2);
+}
+
+.modal-card h3 {
+  margin: 0;
 }
 
 .modal-fields {

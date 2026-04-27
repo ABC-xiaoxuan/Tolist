@@ -255,7 +255,15 @@ export class TodoDatabase {
     const row = this.db.prepare("SELECT value FROM preferences WHERE key = ?").get("window_state") as
       | { value: string }
       | undefined;
-    return row ? ({ ...DEFAULT_WINDOW_STATE, ...JSON.parse(row.value) } as WindowState) : DEFAULT_WINDOW_STATE;
+    if (!row) {
+      return DEFAULT_WINDOW_STATE;
+    }
+    try {
+      return { ...DEFAULT_WINDOW_STATE, ...JSON.parse(row.value) } as WindowState;
+    } catch {
+      this.saveWindowState(DEFAULT_WINDOW_STATE);
+      return DEFAULT_WINDOW_STATE;
+    }
   }
 
   saveWindowState(settings: WindowState) {

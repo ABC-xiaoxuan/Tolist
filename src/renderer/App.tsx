@@ -53,12 +53,27 @@ function formatWidgetDate(dateKey: string) {
   }).format(date);
 }
 
+function toLocalDateKey(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function toLocalMonthKey(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  return `${year}-${month}`;
+}
+
 function buildCalendar(dateKey: string, tasks: TaskRecord[], today: string) {
   const current = new Date(`${dateKey.slice(0, 7)}-01T00:00:00`);
   const month = current.getMonth();
   const start = new Date(current);
   const weekday = (start.getDay() + 6) % 7;
   start.setDate(start.getDate() - weekday);
+  const endOfMonth = new Date(current.getFullYear(), current.getMonth() + 1, 0);
+  const totalVisibleDays = weekday + endOfMonth.getDate() > 35 ? 42 : 35;
   const tasksByDate = new Map<string, TaskRecord[]>();
   for (const task of tasks) {
     const dayTasks = tasksByDate.get(task.taskDate);
@@ -69,10 +84,10 @@ function buildCalendar(dateKey: string, tasks: TaskRecord[], today: string) {
     }
   }
 
-  return Array.from({ length: 35 }, (_, index) => {
+  return Array.from({ length: totalVisibleDays }, (_, index) => {
     const day = new Date(start);
     day.setDate(start.getDate() + index);
-    const key = day.toISOString().slice(0, 10);
+    const key = toLocalDateKey(day);
     const dayTasks = tasksByDate.get(key) ?? [];
     return {
       key,
@@ -126,10 +141,24 @@ function TaskRow({
         </div>
       </div>
       <div className="task-actions">
-        <button className="icon-button" onClick={() => onEdit(task)} title="编辑">
+        <button
+          className="icon-button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onEdit(task);
+          }}
+          title="编辑"
+        >
           <MoreVertical size={18} />
         </button>
-        <button className="icon-button danger" onClick={() => onDelete(task.id)} title="删除">
+        <button
+          className="icon-button danger"
+          onClick={(event) => {
+            event.stopPropagation();
+            onDelete(task.id);
+          }}
+          title="删除"
+        >
           <Trash2 size={18} />
         </button>
       </div>
@@ -239,7 +268,7 @@ export function App() {
   function shiftMonth(offset: number) {
     const base = new Date(`${snapshot.selectedDate.slice(0, 7)}-01T00:00:00`);
     base.setMonth(base.getMonth() + offset);
-    const nextDate = `${base.toISOString().slice(0, 7)}-01`;
+    const nextDate = `${toLocalMonthKey(base)}-01`;
     void window.desktopAPI.setDate(nextDate);
   }
 
