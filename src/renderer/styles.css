@@ -879,6 +879,24 @@ body.main-body:has(.desktop-shell.is-maximized) #root,
   margin-top: 16px;
 }
 
+.modal-error,
+.action-error-banner {
+  color: #b42318;
+  background: rgba(254, 226, 226, 0.92);
+  border: 1px solid rgba(252, 165, 165, 0.96);
+  border-radius: 12px;
+  font-size: 12px;
+}
+
+.modal-error {
+  padding: 9px 11px;
+}
+
+.action-error-banner {
+  margin: 10px 12px 0;
+  padding: 10px 12px;
+}
+
 .modal-actions {
   display: flex;
   justify-content: flex-end;

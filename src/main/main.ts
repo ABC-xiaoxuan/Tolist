@@ -9,6 +9,7 @@ import {
   screen,
   shell,
   type NativeImage,
+  type Point,
   type Rectangle
 } from "electron";
 import log from "electron-log";
@@ -84,6 +85,43 @@ function toDateKey(date: Date) {
 
 function toMonthKey(dateKey: string) {
   return dateKey.slice(0, 7);
+}
+
+function clampBoundsToWorkArea(
+  bounds: Pick<Rectangle, "width" | "height" | "x" | "y">,
+  display = screen.getDisplayNearestPoint({ x: bounds.x, y: bounds.y } as Point)
+) {
+  const { workArea } = display;
+  const width = Math.min(bounds.width, workArea.width);
+  const height = Math.min(bounds.height, workArea.height);
+  const maxX = workArea.x + Math.max(0, workArea.width - width);
+  const maxY = workArea.y + Math.max(0, workArea.height - height);
+
+  return {
+    width,
+    height,
+    x: Math.min(Math.max(bounds.x, workArea.x), maxX),
+    y: Math.min(Math.max(bounds.y, workArea.y), maxY)
+  };
+}
+
+function resolveInitialWidgetBounds(windowState: WindowState) {
+  const rawBounds = {
+    width: Math.min(windowState.widgetBounds?.width ?? 280, 300),
+    height: Math.min(windowState.widgetBounds?.height ?? 420, 470),
+    x: windowState.widgetBounds?.x ?? screen.getPrimaryDisplay().workArea.x + 40,
+    y: windowState.widgetBounds?.y ?? screen.getPrimaryDisplay().workArea.y + 40
+  };
+  return clampBoundsToWorkArea(rawBounds);
+}
+
+function isAllowedExternalUrl(url: string) {
+  try {
+    const parsed = new URL(url);
+    return ["https:", "http:", "mailto:"].includes(parsed.protocol);
+  } catch {
+    return false;
+  }
 }
 
 function resolveRendererUrl(view: "main" | "widget") {
@@ -364,12 +402,7 @@ function createMainWindow() {
 
 function createWidgetWindow() {
   const windowState = db.getWindowState();
-  const widgetBounds = {
-    width: Math.min(windowState.widgetBounds?.width ?? 280, 300),
-    height: Math.min(windowState.widgetBounds?.height ?? 420, 470),
-    x: windowState.widgetBounds?.x,
-    y: windowState.widgetBounds?.y
-  };
+  const widgetBounds = resolveInitialWidgetBounds(windowState);
   const initialCollapsed = windowState.widgetCollapsed;
   widgetWindow = new BrowserWindow({
     width: widgetBounds.width,
@@ -505,17 +538,18 @@ function setWidgetCollapsed(collapsed: boolean) {
         width: current.widgetBounds?.width ?? bounds.width,
         height: Math.max(current.widgetBounds?.height ?? expandedBounds.height, 320)
       };
+  const safeNextBounds = clampBoundsToWorkArea(nextBounds, display);
 
   isApplyingWidgetBounds = true;
   widgetWindow.setMinimumSize(220, WIDGET_COLLAPSED_HEIGHT);
-  widgetWindow.setBounds(nextBounds, true);
+  widgetWindow.setBounds(safeNextBounds, true);
   isApplyingWidgetBounds = false;
   db.saveWindowState({
     ...current,
     widgetCollapsed: collapsed,
     widgetPinned: widgetWindow.isAlwaysOnTop(),
     widgetOpacity: clampWidgetOpacity(current.widgetOpacity),
-    widgetBounds: collapsed ? expandedBounds : nextBounds
+    widgetBounds: collapsed ? clampBoundsToWorkArea(expandedBounds, display) : safeNextBounds
   });
   applyWidgetWindowShape();
   broadcastState();
@@ -813,7 +847,10 @@ function registerIpc() {
   });
 
   ipcMain.handle("app:open-external", (_, url: string) => {
-    shell.openExternal(url);
+    if (!isAllowedExternalUrl(url)) {
+      return false;
+    }
+    void shell.openExternal(url);
     return true;
   });
 }

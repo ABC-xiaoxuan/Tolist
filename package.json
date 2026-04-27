@@ -1,6 +1,6 @@
 {
   "name": "minimal-todo-electron",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "MinimalTodo for Windows built with Electron, React and SQLite",
   "main": "dist-electron/main/main.js",
   "author": "OpenAI Codex",
@@ -34,7 +34,8 @@
     },
     "nsis": {
       "guid": "e9182856-48c1-55b8-9a40-d13f65c66f2a",
-      "oneClick": true,
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
       "perMachine": false,
       "deleteAppDataOnUninstall": false,
       "uninstallDisplayName": "极简待办 ${version}"

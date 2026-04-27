@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type {
   RendererSnapshot,
   TaskLabel,
@@ -195,6 +196,7 @@ export function App() {
   const [editingTask, setEditingTask] = useState<TaskRecord | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
   const [editingLabel, setEditingLabel] = useState<TaskLabel>("工作");
+  const [actionError, setActionError] = useState("");
 
   useEffect(() => {
     document.body.classList.toggle("widget-body", mode === "widget");
@@ -217,6 +219,7 @@ export function App() {
     if (editingTask) {
       setEditingTitle(editingTask.title);
       setEditingLabel(editingTask.label);
+      setActionError("");
     }
   }, [editingTask]);
 
@@ -256,13 +259,30 @@ export function App() {
   const progress = snapshot.tasks.length ? (completedCount / snapshot.tasks.length) * 100 : 0;
   const widgetCompletedCount = snapshot.todayTasks.filter((task) => task.completed).length;
 
+  async function runTaskAction(action: () => Promise<unknown>, fallbackMessage: string) {
+    try {
+      setActionError("");
+      await action();
+      return true;
+    } catch (error) {
+      console.error(error);
+      setActionError(fallbackMessage);
+      return false;
+    }
+  }
+
   async function createTask(taskDate = snapshot.selectedDate) {
     const title = quickTask.trim();
     if (!title) {
       return;
     }
-    await window.desktopAPI.createTask({ title, taskDate, label: taskLabel });
-    setQuickTask("");
+    const succeeded = await runTaskAction(
+      () => window.desktopAPI.createTask({ title, taskDate, label: taskLabel }),
+      "任务创建失败，请稍后重试。"
+    );
+    if (succeeded) {
+      setQuickTask("");
+    }
   }
 
   function shiftMonth(offset: number) {
@@ -310,8 +330,8 @@ export function App() {
               <TaskRow
                 key={task.id}
                 task={task}
-                onToggle={(id) => void window.desktopAPI.toggleTask(id)}
-                onDelete={(id) => void window.desktopAPI.deleteTask(id)}
+                onToggle={(id) => void runTaskAction(() => window.desktopAPI.toggleTask(id), "任务状态已变化，请刷新后重试。")}
+                onDelete={(id) => void runTaskAction(() => window.desktopAPI.deleteTask(id), "任务删除失败，请稍后重试。")}
                 onEdit={setEditingTask}
               />
             ))}
@@ -437,8 +457,8 @@ export function App() {
               <TaskRow
                 key={task.id}
                 task={task}
-                onToggle={(id) => void window.desktopAPI.toggleTask(id)}
-                onDelete={(id) => void window.desktopAPI.deleteTask(id)}
+                onToggle={(id) => void runTaskAction(() => window.desktopAPI.toggleTask(id), "任务状态已变化，请刷新后重试。")}
+                onDelete={(id) => void runTaskAction(() => window.desktopAPI.deleteTask(id), "任务删除失败，请稍后重试。")}
                 onEdit={setEditingTask}
               />
             ))
@@ -505,9 +525,9 @@ export function App() {
       return null;
     }
 
-    return (
+    return createPortal(
       <div className="modal-backdrop" onClick={() => setEditingTask(null)}>
-        <div className="modal-card" onClick={(event) => event.stopPropagation()}>
+        <div className="modal-card no-drag" onClick={(event) => event.stopPropagation()}>
           <div className="card-title-row">
             <h3>编辑任务</h3>
             <button className="icon-button" onClick={() => setEditingTask(null)}>
@@ -515,6 +535,7 @@ export function App() {
             </button>
           </div>
           <div className="modal-fields">
+            {actionError ? <div className="modal-error">{actionError}</div> : null}
             <label>
               任务名称
               <input value={editingTitle} onChange={(event) => setEditingTitle(event.target.value)} />
@@ -536,20 +557,27 @@ export function App() {
             </button>
             <button
               className="primary-button"
-              onClick={() => {
-                void window.desktopAPI.updateTask({
-                  id: editingTask.id,
-                  title: editingTitle,
-                  label: editingLabel
-                });
-                setEditingTask(null);
+              onClick={async () => {
+                const succeeded = await runTaskAction(
+                  () =>
+                    window.desktopAPI.updateTask({
+                      id: editingTask.id,
+                      title: editingTitle,
+                      label: editingLabel
+                    }),
+                  "任务已变化或不存在，请关闭弹窗后重试。"
+                );
+                if (succeeded) {
+                  setEditingTask(null);
+                }
               }}
             >
               保存
             </button>
           </div>
         </div>
-      </div>
+      </div>,
+      document.body
     );
   }
 
@@ -606,8 +634,8 @@ export function App() {
                     <TaskRow
                       key={task.id}
                       task={task}
-                      onToggle={(id) => void window.desktopAPI.toggleTask(id)}
-                      onDelete={(id) => void window.desktopAPI.deleteTask(id)}
+                      onToggle={(id) => void runTaskAction(() => window.desktopAPI.toggleTask(id), "任务状态已变化，请刷新后重试。")}
+                      onDelete={(id) => void runTaskAction(() => window.desktopAPI.deleteTask(id), "任务删除失败，请稍后重试。")}
                       onEdit={setEditingTask}
                     />
                   ))}
@@ -650,6 +678,7 @@ export function App() {
           <WindowControls />
         </div>
       </header>
+      {actionError ? <div className="action-error-banner no-drag">{actionError}</div> : null}
       <div className="layout">
         <aside className="sidebar">
           <nav className="nav-list">
